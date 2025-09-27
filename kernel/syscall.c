@@ -7,6 +7,17 @@
 #include "syscall.h"
 #include "defs.h"
 
+struct spinlock syscallCounterLock;
+int syscallCounter[MAX_SYSCALL];
+
+void 
+syscallinit(void){
+  initlock(&syscallCounterLock, "syscallCounterLock");
+  for (int i = 0; i < MAX_SYSCALL; i++){
+    syscallCounter[i] = 0;
+  }
+}
+
 // Fetch the uint64 at addr from the current process.
 int
 fetchaddr(uint64 addr, uint64 *ip)
@@ -79,6 +90,13 @@ argstr(int n, char *buf, int max)
   return fetchstr(addr, buf, max);
 }
 
+int getcnt(int num) {
+    acquire(&syscallCounterLock);
+    int count = syscallCounter[num];
+    release(&syscallCounterLock);
+    return count;
+}
+
 // Prototypes for the functions that handle system calls.
 extern uint64 sys_fork(void);
 extern uint64 sys_exit(void);
@@ -140,7 +158,9 @@ syscall(void)
   if(num > 0 && num < NELEM(syscalls) && syscalls[num]) {
     // Use num to lookup the system call function for num, call it,
     // and store its return value in p->trapframe->a0
-    p->syscallCounter[num]++;
+    acquire(&syscallCounterLock);
+    syscallCounter[num]++;
+    release(&syscallCounterLock);
     p->trapframe->a0 = syscalls[num]();
   } else {
     printf("%d %s: unknown sys call %d\n",
