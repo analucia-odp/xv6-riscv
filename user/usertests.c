@@ -2698,6 +2698,57 @@ lazy_copy(char *s)
   exit(0);
 }
 
+
+// Test getcnt syscall
+void test_getcnt()
+{
+  int before, after;
+  int init_getcnt = getcnt(22);
+
+  before = getcnt(11);
+  getpid();
+  getpid();
+  after = getcnt(11);
+  if (after != before + 2){
+    printf(" (1) - test_getcnt failed (%d -> %d)\n", before, after);
+    exit(1);
+  }
+
+  before = getcnt(14);
+  uptime();
+  after = getcnt(14);
+  if (after != before + 1){
+    printf(" (2) test_getcnt failed (%d -> %d)\n", before, after);
+    exit(1);
+  }
+
+  after = getcnt(22);
+  before = init_getcnt + 5;
+  if (after != init_getcnt + 5){
+    printf("(3) test_getcnt failed (%d -> %d)\n", before, after);
+    exit(1);
+  }
+
+  before = getcnt(11);
+  int pid = fork();
+  if (pid < 0) {
+    printf("test_getcnt: fork failed\n");
+    exit(1);
+  }
+  if (pid == 0) {
+    /* filho faz 3 chamadas a getpid */
+    getpid(); getpid(); getpid();
+    exit(0);
+  }
+  int st;
+  wait(&st);
+  after = getcnt(11);
+  if (after < before + 3) {
+    printf("(4) test_getcnt: failed (%d -> %d)\n", before, after);
+    exit(1);
+  }
+}
+
 struct test {
   void (*f)(char *);
   char *s;
@@ -2765,6 +2816,7 @@ struct test {
   {lazy_alloc, "lazy_alloc"},
   {lazy_unmap, "lazy_unmap"},
   {lazy_copy, "lazy_copy"},
+  {test_getcnt, "test_getcnt"},
   { 0, 0},
 };
 
