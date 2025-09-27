@@ -112,7 +112,7 @@ sys_getcnt(void)
   int n;
 
   argint(0, &n);
-  if(n <= 0)
+  if(n <= 0 || n >= MAX_SYSCALL)
     return -1;
   return myproc()->syscallCounter[n];
 }
