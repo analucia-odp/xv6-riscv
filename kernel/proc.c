@@ -5,6 +5,11 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "pstat.h"
+
+#define INCREMENT 1013904223
+#define MULTIPLIER 1664525
+unsigned int rand_state = 1;
 
 struct cpu cpus[NCPU];
 
@@ -25,6 +30,20 @@ extern char trampoline[]; // trampoline.S
 // memory model when using p->parent.
 // must be acquired before any p->lock.
 struct spinlock wait_lock;
+struct spinlock total_tickets_lock;
+
+unsigned int
+random(void)
+{
+    rand_state = rand_state * MULTIPLIER + INCREMENT;
+    return rand_state;
+}
+
+void
+seedinit(unsigned int seed)
+{
+    rand_state = seed;
+}
 
 // Allocate a page for each process's kernel stack.
 // Map it high in memory, followed by an invalid
@@ -51,6 +70,7 @@ procinit(void)
   
   initlock(&pid_lock, "nextpid");
   initlock(&wait_lock, "wait_lock");
+  initlock(&total_tickets_lock, "total_tickets_lock");
   for(p = proc; p < &proc[NPROC]; p++) {
       initlock(&p->lock, "proc");
       p->state = UNUSED;
@@ -146,6 +166,10 @@ found:
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
 
+  // Inicializa tickets e o preemption_count quando processo e criado
+  p->tickets = 1;
+  p->preemption_count = 0;
+
   return p;
 }
 
@@ -223,7 +247,7 @@ userinit(void)
 
   p = allocproc();
   initproc = p;
-  
+
   p->cwd = namei("/");
 
   p->state = RUNNABLE;
@@ -261,17 +285,18 @@ kfork(void)
   struct proc *p = myproc();
 
   // Allocate process.
-  if((np = allocproc()) == 0){
-    return -1;
+  if((np = allocproc()) == 0){ //Nao tem espaco livre para alocar um no processo
+    return -1; 
   }
 
   // Copy user memory from parent to child.
-  if(uvmcopy(p->pagetable, np->pagetable, p->sz) < 0){
-    freeproc(np);
-    release(&np->lock);
+  if(uvmcopy(p->pagetable, np->pagetable, p->sz) < 0){ //Se der errado copiar a memoria do pai pro filho
+    freeproc(np); //Libera a memoria alocada
+    release(&np->lock); // Libera o lock do novo processo
     return -1;
   }
   np->sz = p->sz;
+  np->tickets = p->tickets; // Copia o numero de tickets do processo pai para o filho
 
   // copy saved user registers.
   *(np->trapframe) = *(p->trapframe);
@@ -355,6 +380,9 @@ kexit(int status)
   p->xstate = status;
   p->state = ZOMBIE;
 
+  p->tickets = 0; 
+  p->preemption_count = 0;  
+
   release(&wait_lock);
 
   // Jump into the scheduler, never to return.
@@ -423,6 +451,7 @@ scheduler(void)
 {
   struct proc *p;
   struct cpu *c = mycpu();
+  int total_tickets;
 
   c->proc = 0;
   for(;;){
@@ -434,27 +463,48 @@ scheduler(void)
     intr_on();
     intr_off();
 
-    int found = 0;
+    total_tickets = 0;
+    for (p = proc; p < &proc[NPROC]; p++) {
+      acquire(&p->lock);
+      if (p->state == RUNNABLE) {
+        acquire(&total_tickets_lock);
+        total_tickets += p->tickets;
+        release(&total_tickets_lock);
+      }
+      release(&p->lock);
+    }
+
+    if (total_tickets == 0){
+        // nothing to run; stop running on this core until an interrupt.
+       asm volatile("wfi");
+       continue;
+    }
+
+    unsigned int random_result = random();
+    int winner = random_result % total_tickets;
+
+    int count = 0;
     for(p = proc; p < &proc[NPROC]; p++) {
       acquire(&p->lock);
       if(p->state == RUNNABLE) {
         // Switch to chosen process.  It is the process's job
         // to release its lock and then reacquire it
         // before jumping back to us.
-        p->state = RUNNING;
-        c->proc = p;
-        swtch(&c->context, &p->context);
+        count += p->tickets;
+        if (count > winner){
+          p->state = RUNNING;
+          p->preemption_count++;
 
-        // Process is done running for now.
-        // It should have changed its p->state before coming back.
-        c->proc = 0;
-        found = 1;
+          c->proc = p;
+          swtch(&c->context, &p->context);
+          // Process is done running for now.
+          // It should have changed its p->state before coming back.
+          c->proc = 0;
+          release(&p->lock);
+          break; 
+        }
       }
       release(&p->lock);
-    }
-    if(found == 0) {
-      // nothing to run; stop running on this core until an interrupt.
-      asm volatile("wfi");
     }
   }
 }
@@ -684,4 +734,34 @@ procdump(void)
     printf("%d %s %s", p->pid, state, p->name);
     printf("\n");
   }
+}
+
+int
+getpinfo(uint64 pinfo_addr)
+{
+
+  struct proc *p;
+  struct pstat procstat;
+
+  printf("Getting process info...\n");
+
+  int index = 0;
+  for(p = proc; p < &proc[NPROC]; p++) {
+    acquire(&p->lock);
+    if(p->state != UNUSED) {
+	    procstat.pid[index] = p->pid;
+      procstat.ticks[index] = p->preemption_count;
+      procstat.tickets[index] = p->tickets;
+      procstat.inuse[index] = 1;
+    } else {
+      procstat.inuse[index] = 0;
+    }
+    index++;
+    release(&p->lock);
+  }
+
+  if(copyout(myproc()->pagetable, pinfo_addr, (char *)&procstat, sizeof(procstat)) < 0)
+    return -1;
+    
+  return 0;
 }

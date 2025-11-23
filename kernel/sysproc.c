@@ -116,3 +116,32 @@ sys_getcnt(void)
     return -1;
   return getcnt(n);
 }
+
+uint64
+sys_settickets(void)
+{
+  int tickets;
+
+  argint(0, &tickets);
+  if(tickets <= 0)
+    return -1;
+
+  acquire(&myproc()->lock);
+  myproc()->tickets = tickets;
+  release(&myproc()->lock);
+
+  return 0;
+}
+
+uint64
+sys_getpinfo(void)
+{
+  uint64 pinfo_addr;
+
+  argaddr(0, &pinfo_addr);
+
+  if (pinfo_addr == 0) 
+    return -1;
+
+  return getpinfo(pinfo_addr);
+}
