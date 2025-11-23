@@ -144,6 +144,7 @@ UPROGS=\
 	$U/_dorphan\
 	$U/_getcnt\
 	$U/_lottery\
+	$U/_lotteryfork\
 
 fs.img: mkfs/mkfs README $(UPROGS)
 	mkfs/mkfs fs.img README $(UPROGS)
